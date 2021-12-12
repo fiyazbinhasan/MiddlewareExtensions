@@ -1,21 +1,9 @@
 using System.Globalization;
-using System.Net;
-using System.Text.Json;
-using UseMiddleware;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-//app.UseExceptionHandler();
-
-var loggerFactory = LoggerFactory.Create(loggingBuilder =>
-{
-    loggingBuilder.AddFilter(level => level == LogLevel.Warning);
-    loggingBuilder.AddConsole();
-});
-
-var logger = loggerFactory.CreateLogger<Program>();
-
+/* next is type of Func<Task> */
 app.Use(async (context, next) =>
 {
     var cultureQuery = context.Request.Query["culture"];
@@ -27,65 +15,41 @@ app.Use(async (context, next) =>
         CultureInfo.CurrentUICulture = culture;
     }
 
-    // Call the next delegate/middleware in the pipeline
+    await next();
+});
+
+/* 
+    1. next is type of RequestDelegate which requires passing the HttpContext
+    2. Use this for performance benefits
+    3. Saves two per request allocations over the previous Use extension
+*/
+app.Use(async (context, next) =>
+{
+    var cultureQuery = context.Request.Query["culture"];
+    if (!string.IsNullOrWhiteSpace(cultureQuery))
+    {
+        var culture = new CultureInfo(cultureQuery);
+
+        CultureInfo.CurrentCulture = culture;
+        CultureInfo.CurrentUICulture = culture;
+    }
+
     await next(context);
 });
+
+/*
+    1. next is not used i.e. it is a terminal middleware
+    2. Every other middleware after a terminal middleware is skipped
+    1. Use should be replaced with Run or it will throw a compile time error (CS0121: ambiguous)
+
+    app.Use(async (context, next) => {
+        await context.Response.WriteAsync(
+            $"Hello {CultureInfo.CurrentCulture.DisplayName}");
+    });
+*/
 
 app.Run(async (context) =>
 {
     await context.Response.WriteAsync(
-        $"Hello {Equals(c, context)}");
+        $"Hello {CultureInfo.CurrentCulture.DisplayName}");
 });
-
-app.Use(async (context, requestDelegate) =>
-{
-    try
-    {
-        await requestDelegate(context);
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex.Message);
-        var result = JsonSerializer.Serialize(new ErrorEnvelope(ex.Message, (int)HttpStatusCode.InternalServerError));
-        context.Response.ContentType = "application/json";
-        context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
-        await context.Response.WriteAsync(result);
-    }
-});
-
-app.Use(async (context, requestDelegate) =>
-{
-    try
-    {
-        var previousContextResponse = context.Response;
-        await requestDelegate(context);
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex.Message);
-        var result = JsonSerializer.Serialize(new ErrorEnvelope(ex.Message, (int)HttpStatusCode.InternalServerError));
-        context.Response.ContentType = "application/json";
-        context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
-        await context.Response.WriteAsync(result);
-    }
-});
-
-app.Use(async (context, func) =>
-{
-    try
-    {
-        await func();
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex.Message);
-        var result = JsonSerializer.Serialize(new ErrorEnvelope(ex.Message, (int)HttpStatusCode.InternalServerError));
-        context.Response.ContentType = "application/json";
-        context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
-        await context.Response.WriteAsync(result);
-    }
-});
-
-app.MapGet("/", () => new Item("Test"));
-
-app.Run();
